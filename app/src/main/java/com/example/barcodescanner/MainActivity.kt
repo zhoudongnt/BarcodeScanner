@@ -57,8 +57,8 @@ fun BarcodeScannerApp() {
             CameraScreen(
                 viewModel = viewModel,
                 onBackClick = { navController.popBackStack() },
-                onResultFound = { value, format, type ->
-                    currentResult = ResultData(value, format, type)
+                onResultFound = { text, format, type ->
+                    currentResult = ResultData(text, format, type)
                     navController.navigate(Screen.Result.route)
                 }
             )
@@ -67,8 +67,8 @@ fun BarcodeScannerApp() {
         composable(Screen.ImageScan.route) {
             ImageScanScreen(
                 onBackClick = { navController.popBackStack() },
-                onResultFound = { value, format, type ->
-                    currentResult = ResultData(value, format, type)
+                onResultFound = { text, format, type ->
+                    currentResult = ResultData(text, format, type)
                     navController.navigate(Screen.Result.route)
                 }
             )
