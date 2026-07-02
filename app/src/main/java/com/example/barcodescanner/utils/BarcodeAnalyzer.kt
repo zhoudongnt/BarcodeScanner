@@ -11,7 +11,17 @@ class BarcodeAnalyzer(
     private val onBarcodeDetected: (List<Barcode>) -> Unit
 ) : ImageAnalysis.Analyzer {
 
-    private val scanner = BarcodeScanning.getClient()
+    private val scannerOptions = com.google.mlkit.vision.barcode.BarcodeScannerOptions.Builder()
+        .setBarcodeFormats(
+            Barcode.FORMAT_ALL_FORMATS,
+            Barcode.FORMAT_CODE_128,
+            Barcode.FORMAT_CODE_39,
+            Barcode.FORMAT_ITF,
+            Barcode.FORMAT_CODABAR
+        )
+        .build()
+
+    private val scanner = BarcodeScanning.getClient(scannerOptions)
 
     @SuppressLint("UnsafeOptInUsageError")
     override fun analyze(imageProxy: ImageProxy) {

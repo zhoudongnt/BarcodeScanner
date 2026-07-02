@@ -3,6 +3,7 @@ package com.example.barcodescanner.ui.screen
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,6 +35,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlin.math.roundToInt
 
 private enum class DragMode { NONE, CREATE, MOVE }
@@ -400,32 +402,17 @@ private suspend fun analyzeImage(
 
     val rotations = listOf(0, 90, 180, 270)
     for (rotation in rotations) {
-        val rotated = if (rotation == 0) {
-            bitmap
-        } else {
-            rotateBitmap(bitmap, rotation)
-        }
-
+        val rotated = if (rotation == 0) bitmap else rotateBitmap(bitmap, rotation)
         val image = InputImage.fromBitmap(rotated, 0)
-        var success = false
-        var barcodesResult: List<Barcode> = emptyList()
 
-        scanner.process(image)
-            .addOnSuccessListener { barcodes ->
-                success = true
-                barcodesResult = barcodes
+        try {
+            val barcodes = scanner.process(image).await()
+            if (barcodes.isNotEmpty()) {
+                onResult(barcodes)
+                return
             }
-            .addOnFailureListener {
-                success = true
-            }
-
-        while (!success) {
-            delay(50)
-        }
-
-        if (barcodesResult.isNotEmpty()) {
-            onResult(barcodesResult)
-            return
+        } catch (_: Exception) {
+            // Ignore errors
         }
     }
 
