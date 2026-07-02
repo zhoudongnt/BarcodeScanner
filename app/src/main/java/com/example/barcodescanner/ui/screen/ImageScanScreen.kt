@@ -34,7 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.mlkit.vision.text.TextRecognition
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -193,6 +193,7 @@ fun ImageScanScreen(
                                 .pointerInput(currentBitmap) {
                                     detectDragGestures(
                                         onDragStart = { start ->
+                                            // Transform selection coordinates back to current view (without scale)
                                             val sel = currentSelection?.normalized()
                                             if (sel != null &&
                                                 start.x >= sel.left - 24f &&
@@ -293,7 +294,7 @@ fun ImageScanScreen(
                             onClick = {
                                 isAnalyzing = true
                                 scope.launch {
-                                    val imageToScan = cropBitmap(bitmap, selection, imageBoxSize) ?: bitmap
+                                    val imageToScan = cropBitmap(bitmap, selection, imageBoxSize, scale, offset) ?: bitmap
                                     when (scanMode) {
                                         ScanMode.BARCODE -> {
                                             analyzeBarcode(context, imageToScan) { barcodes ->
@@ -486,16 +487,41 @@ private data class ImageBounds(
 private fun cropBitmap(
     bitmap: Bitmap,
     selection: CropSelection?,
-    boxSize: IntSize
+    boxSize: IntSize,
+    scale: Float,
+    offset: Offset
 ): Bitmap? {
     val rect = selection?.normalized() ?: return null
     val bmp = computeImageBounds(bitmap, boxSize)
-    if (rect.width < 20f || rect.height < 20f) return null
 
-    val cropLeft = rect.left.coerceIn(bmp.left, bmp.right)
-    val cropTop = rect.top.coerceIn(bmp.top, bmp.bottom)
-    val cropRight = rect.right.coerceIn(bmp.left, bmp.right)
-    val cropBottom = rect.bottom.coerceIn(bmp.top, bmp.bottom)
+    // First, reverse the graphicsLayer transform on selection coordinates
+    // Reverse order: translate then scale
+    val center = Offset(boxSize.width.toFloat()/2, boxSize.height.toFloat()/2)
+
+    // Because graphicsLayer scales from center, we need to reverse that transform properly
+    val invScale = 1/scale
+    val invOffset = Offset(-offset.x, -offset.y)
+
+    // Transform selection points back to pre-scaled view
+    fun transformPoint(p: Offset): Offset {
+        // 1. Subtract offset
+        val t1 = p + invOffset
+        // 2. Unscale around center
+        val fromCenter = t1 - center
+        val unscaled = fromCenter * invScale
+        return unscaled + center
+    }
+
+    val leftTrans = transformPoint(Offset(rect.left, 0f)).x
+    val rightTrans = transformPoint(Offset(rect.right, 0f)).x
+    val topTrans = transformPoint(Offset(0f, rect.top)).y
+    val bottomTrans = transformPoint(Offset(0f, rect.bottom)).y
+
+    // Now clamp to image bounds
+    val cropLeft = minOf(leftTrans, rightTrans).coerceIn(bmp.left, bmp.right)
+    val cropTop = minOf(topTrans, bottomTrans).coerceIn(bmp.top, bmp.bottom)
+    val cropRight = maxOf(leftTrans, rightTrans).coerceIn(bmp.left, bmp.right)
+    val cropBottom = maxOf(topTrans, bottomTrans).coerceIn(bmp.top, bmp.bottom)
 
     if (cropRight - cropLeft < 20f || cropBottom - cropTop < 20f) return null
 
@@ -554,7 +580,8 @@ private suspend fun analyzeOcr(
     bitmap: Bitmap,
     onResult: (String, Float?) -> Unit
 ) {
-    val options = ChineseTextRecognizerOptions.Builder().build()
+    // Use LATIN OCR for better accuracy on English letters/digits
+    val options = TextRecognizerOptions.Builder().build()
     val recognizer = TextRecognition.getClient(options)
 
     val rotations = listOf(0, 90, 180, 270)
