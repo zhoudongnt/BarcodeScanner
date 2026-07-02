@@ -26,6 +26,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -70,11 +71,13 @@ fun ImageScanScreen(
 
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var rotation by remember { mutableStateOf(0f) }
 
-    val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
+    val transformableState = rememberTransformableState { zoomChange, panChange, rotationChange ->
         scale *= zoomChange
         scale = scale.coerceIn(1f, 5f)
         offset += panChange
+        rotation += rotationChange
     }
 
     val currentSelection by rememberUpdatedState(selection)
@@ -91,6 +94,7 @@ fun ImageScanScreen(
             errorMessage = null
             scale = 1f
             offset = Offset.Zero
+            rotation = 0f
         }
     }
 
@@ -140,83 +144,102 @@ fun ImageScanScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .transformable(state = transformableState)
                             .onSizeChanged { imageBoxSize = it }
-                            .pointerInput(currentBitmap) {
-                                detectDragGestures(
-                                    onDragStart = { start ->
-                                        val sel = currentSelection?.normalized()
-                                        if (sel != null &&
-                                            start.x >= sel.left - 24f &&
-                                            start.x <= sel.right + 24f &&
-                                            start.y >= sel.top - 24f &&
-                                            start.y <= sel.bottom + 24f
-                                        ) {
-                                            dragMode = DragMode.MOVE
-                                        } else {
-                                            dragMode = DragMode.CREATE
-                                            selection = CropSelection(start.x, start.y, start.x, start.y)
-                                        }
-                                        errorMessage = null
-                                    },
-                                    onDrag = { change, dragAmount ->
-                                        when (currentDragMode) {
-                                            DragMode.MOVE -> {
-                                                val sel = currentSelection ?: return@detectDragGestures
-                                                selection = CropSelection(
-                                                    startX = sel.startX + dragAmount.x,
-                                                    startY = sel.startY + dragAmount.y,
-                                                    endX = sel.endX + dragAmount.x,
-                                                    endY = sel.endY + dragAmount.y
-                                                )
-                                            }
-                                            DragMode.CREATE -> {
-                                                selection = selection?.copy(
-                                                    endX = change.position.x,
-                                                    endY = change.position.y
-                                                )
-                                            }
-                                            DragMode.NONE -> {}
-                                        }
-                                        change.consume()
-                                    },
-                                    onDragEnd = {
-                                        dragMode = DragMode.NONE
-                                    },
-                                    onDragCancel = {
-                                        dragMode = DragMode.NONE
-                                    }
-                                )
-                            }
                     ) {
+                        // Layer 1: The actual image with zoom/pan (for visual)
                         Image(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = "Selected image",
                             modifier = Modifier
                                 .fillMaxSize()
-                                .offset(offset.x.dp, offset.y.dp),
+                                .graphicsLayer(
+                                    scaleX = scale,
+                                    scaleY = scale,
+                                    translationX = offset.x,
+                                    translationY = offset.y,
+                                    rotationZ = rotation
+                                ),
                             contentScale = ContentScale.Fit,
                         )
 
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            selection?.normalized()?.let { rect ->
-                                val strokeW = 4.dp.toPx()
-                                drawRect(
-                                    color = Color.Cyan,
-                                    topLeft = Offset(rect.left, rect.top),
-                                    size = Size(rect.width, rect.height),
-                                    style = Stroke(width = strokeW)
-                                )
-                                drawRect(
-                                    color = Color.Cyan.copy(alpha = 0.12f),
-                                    topLeft = Offset(rect.left, rect.top),
-                                    size = Size(rect.width, rect.height)
-                                )
-                                val corner = 12.dp.toPx()
-                                drawCircle(Color.Cyan, corner, Offset(rect.left, rect.top))
-                                drawCircle(Color.Cyan, corner, Offset(rect.right, rect.top))
-                                drawCircle(Color.Cyan, corner, Offset(rect.left, rect.bottom))
-                                drawCircle(Color.Cyan, corner, Offset(rect.right, rect.bottom))
+                        // Layer 2: Zoom/pan detector on top
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .transformable(state = transformableState)
+                        )
+
+                        // Layer 3: Selection box and drag handling (always in view coordinates)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(currentBitmap) {
+                                    detectDragGestures(
+                                        onDragStart = { start ->
+                                            val sel = currentSelection?.normalized()
+                                            if (sel != null &&
+                                                start.x >= sel.left - 24f &&
+                                                start.x <= sel.right + 24f &&
+                                                start.y >= sel.top - 24f &&
+                                                start.y <= sel.bottom + 24f
+                                            ) {
+                                                dragMode = DragMode.MOVE
+                                            } else {
+                                                dragMode = DragMode.CREATE
+                                                selection = CropSelection(start.x, start.y, start.x, start.y)
+                                            }
+                                            errorMessage = null
+                                        },
+                                        onDrag = { change, dragAmount ->
+                                            when (currentDragMode) {
+                                                DragMode.MOVE -> {
+                                                    val sel = currentSelection ?: return@detectDragGestures
+                                                    selection = CropSelection(
+                                                        startX = sel.startX + dragAmount.x,
+                                                        startY = sel.startY + dragAmount.y,
+                                                        endX = sel.endX + dragAmount.x,
+                                                        endY = sel.endY + dragAmount.y
+                                                    )
+                                                }
+                                                DragMode.CREATE -> {
+                                                    selection = selection?.copy(
+                                                        endX = change.position.x,
+                                                        endY = change.position.y
+                                                    )
+                                                }
+                                                DragMode.NONE -> {}
+                                            }
+                                            change.consume()
+                                        },
+                                        onDragEnd = {
+                                            dragMode = DragMode.NONE
+                                        },
+                                        onDragCancel = {
+                                            dragMode = DragMode.NONE
+                                        }
+                                    )
+                                }
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                selection?.normalized()?.let { rect ->
+                                    val strokeW = 4.dp.toPx()
+                                    drawRect(
+                                        color = Color.Cyan,
+                                        topLeft = Offset(rect.left, rect.top),
+                                        size = Size(rect.width, rect.height),
+                                        style = Stroke(width = strokeW)
+                                    )
+                                    drawRect(
+                                        color = Color.Cyan.copy(alpha = 0.12f),
+                                        topLeft = Offset(rect.left, rect.top),
+                                        size = Size(rect.width, rect.height)
+                                    )
+                                    val corner = 12.dp.toPx()
+                                    drawCircle(Color.Cyan, corner, Offset(rect.left, rect.top))
+                                    drawCircle(Color.Cyan, corner, Offset(rect.right, rect.top))
+                                    drawCircle(Color.Cyan, corner, Offset(rect.left, rect.bottom))
+                                    drawCircle(Color.Cyan, corner, Offset(rect.right, rect.bottom))
+                                }
                             }
                         }
                     }
@@ -260,9 +283,6 @@ fun ImageScanScreen(
                                                 isAnalyzing = false
                                                 if (barcodes.isNotEmpty()) {
                                                     val barcode = barcodes.first()
-                                                    val confidence = barcode.cornerPoints?.let {
-                                                        1.0f // Barcode doesn't give explicit confidence, but we'll set to 1.0
-                                                    }
                                                     onResultFound(
                                                         barcode.rawValue ?: "",
                                                         getFormatName(barcode.format),
