@@ -33,12 +33,15 @@ import androidx.compose.ui.unit.dp
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.google.mlkit.vision.text.TextRecognition
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlin.math.roundToInt
 
 private enum class DragMode { NONE, CREATE, MOVE }
+private enum class ScanMode { BARCODE, OCR }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,6 +57,7 @@ fun ImageScanScreen(
     var isAnalyzing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var dragMode by remember { mutableStateOf(DragMode.NONE) }
+    var scanMode by remember { mutableStateOf(ScanMode.BARCODE) }
 
     val currentSelection by rememberUpdatedState(selection)
     val currentDragMode by rememberUpdatedState(dragMode)
@@ -95,6 +99,10 @@ fun ImageScanScreen(
         ) {
             val bitmap = selectedBitmap
             if (bitmap != null) {
+                SegmentedButtons(scanMode) { mode -> scanMode = mode }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
                     text = "Drag inside the box to move it, or drag outside to draw a new box.",
                     style = MaterialTheme.typography.bodyMedium,
@@ -223,20 +231,34 @@ fun ImageScanScreen(
                                 isAnalyzing = true
                                 scope.launch {
                                     val imageToScan = cropBitmap(bitmap, selection, imageBoxSize) ?: bitmap
-                                    analyzeImage(context, imageToScan) { barcodes ->
-                                        isAnalyzing = false
-                                        if (barcodes.isNotEmpty()) {
-                                            val barcode = barcodes.first()
-                                            onResultFound(
-                                                barcode.rawValue ?: "",
-                                                getFormatName(barcode.format),
-                                                getValueTypeName(barcode.valueType)
-                                            )
-                                        } else {
-                                            errorMessage = if (selection == null) {
-                                                "No barcode found. Try dragging a box around the barcode."
-                                            } else {
-                                                "No barcode found in the selected area. Try a larger box."
+                                    when (scanMode) {
+                                        ScanMode.BARCODE -> {
+                                            analyzeBarcode(context, imageToScan) { barcodes ->
+                                                isAnalyzing = false
+                                                if (barcodes.isNotEmpty()) {
+                                                    val barcode = barcodes.first()
+                                                    onResultFound(
+                                                        barcode.rawValue ?: "",
+                                                        getFormatName(barcode.format),
+                                                        getValueTypeName(barcode.valueType)
+                                                    )
+                                                } else {
+                                                    errorMessage = if (selection == null) {
+                                                        "No barcode found. Try dragging a box around the barcode."
+                                                    } else {
+                                                        "No barcode found in the selected area. Try a larger box."
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        ScanMode.OCR -> {
+                                            analyzeOcr(context, imageToScan) { text ->
+                                                isAnalyzing = false
+                                                if (text.isNotBlank()) {
+                                                    onResultFound(text, "OCR", "Text")
+                                                } else {
+                                                    errorMessage = "No text found in the selected area."
+                                                }
                                             }
                                         }
                                     }
@@ -287,6 +309,44 @@ fun ImageScanScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SegmentedButtons(
+    selectedMode: ScanMode,
+    onModeSelected: (ScanMode) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ScanMode.values().forEach { mode ->
+            val isSelected = selectedMode == mode
+            Button(
+                onClick = { onModeSelected(mode) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    contentColor = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = when (mode) {
+                        ScanMode.BARCODE -> "Barcode"
+                        ScanMode.OCR -> "OCR (Text)"
+                    }
+                )
             }
         }
     }
@@ -383,7 +443,7 @@ private fun cropBitmap(
     return Bitmap.createBitmap(bitmap, px, py, pw, ph)
 }
 
-private suspend fun analyzeImage(
+private suspend fun analyzeBarcode(
     context: Context,
     bitmap: Bitmap,
     onResult: (List<Barcode>) -> Unit
@@ -417,6 +477,33 @@ private suspend fun analyzeImage(
     }
 
     onResult(emptyList())
+}
+
+private suspend fun analyzeOcr(
+    context: Context,
+    bitmap: Bitmap,
+    onResult: (String) -> Unit
+) {
+    val options = ChineseTextRecognizerOptions.Builder().build()
+    val recognizer = TextRecognition.getClient(options)
+
+    val rotations = listOf(0, 90, 180, 270)
+    for (rotation in rotations) {
+        val rotated = if (rotation == 0) bitmap else rotateBitmap(bitmap, rotation)
+        val image = InputImage.fromBitmap(rotated, 0)
+
+        try {
+            val text = recognizer.process(image).await()
+            if (text.text.isNotBlank()) {
+                onResult(text.text)
+                return
+            }
+        } catch (_: Exception) {
+            // Ignore errors
+        }
+    }
+
+    onResult("")
 }
 
 private fun rotateBitmap(bmp: Bitmap, degrees: Int): Bitmap {
