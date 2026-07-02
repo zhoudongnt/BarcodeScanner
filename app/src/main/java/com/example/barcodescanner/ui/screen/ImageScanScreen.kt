@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -43,6 +45,13 @@ import kotlin.math.roundToInt
 private enum class DragMode { NONE, CREATE, MOVE }
 private enum class ScanMode { BARCODE, OCR }
 
+data class ScanResult(
+    val rawValue: String,
+    val format: String,
+    val valueType: String,
+    val confidence: Float? = null
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImageScanScreen(
@@ -59,6 +68,15 @@ fun ImageScanScreen(
     var dragMode by remember { mutableStateOf(DragMode.NONE) }
     var scanMode by remember { mutableStateOf(ScanMode.BARCODE) }
 
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    val transformableState = rememberTransformableState { zoomChange, panChange, _ ->
+        scale *= zoomChange
+        scale = scale.coerceIn(1f, 5f)
+        offset += panChange
+    }
+
     val currentSelection by rememberUpdatedState(selection)
     val currentDragMode by rememberUpdatedState(dragMode)
     val currentBitmap by rememberUpdatedState(selectedBitmap)
@@ -71,6 +89,8 @@ fun ImageScanScreen(
             selectedBitmap = bitmap
             selection = null
             errorMessage = null
+            scale = 1f
+            offset = Offset.Zero
         }
     }
 
@@ -104,7 +124,7 @@ fun ImageScanScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Drag inside the box to move it, or drag outside to draw a new box.",
+                    text = "Pinch to zoom, drag on image to select area.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
@@ -120,6 +140,7 @@ fun ImageScanScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .transformable(state = transformableState)
                             .onSizeChanged { imageBoxSize = it }
                             .pointerInput(currentBitmap) {
                                 detectDragGestures(
@@ -171,8 +192,10 @@ fun ImageScanScreen(
                         Image(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = "Selected image",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .offset(offset.x.dp, offset.y.dp),
+                            contentScale = ContentScale.Fit,
                         )
 
                         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -237,6 +260,9 @@ fun ImageScanScreen(
                                                 isAnalyzing = false
                                                 if (barcodes.isNotEmpty()) {
                                                     val barcode = barcodes.first()
+                                                    val confidence = barcode.cornerPoints?.let {
+                                                        1.0f // Barcode doesn't give explicit confidence, but we'll set to 1.0
+                                                    }
                                                     onResultFound(
                                                         barcode.rawValue ?: "",
                                                         getFormatName(barcode.format),
@@ -252,10 +278,17 @@ fun ImageScanScreen(
                                             }
                                         }
                                         ScanMode.OCR -> {
-                                            analyzeOcr(context, imageToScan) { text ->
+                                            analyzeOcr(context, imageToScan) { text, confidence ->
                                                 isAnalyzing = false
                                                 if (text.isNotBlank()) {
-                                                    onResultFound(text, "OCR", "Text")
+                                                    val confidenceStr = confidence?.let {
+                                                        " (${(it * 100).toInt()}% confidence)"
+                                                    } ?: ""
+                                                    onResultFound(
+                                                        "$text$confidenceStr",
+                                                        "OCR",
+                                                        "Text"
+                                                    )
                                                 } else {
                                                     errorMessage = "No text found in the selected area."
                                                 }
@@ -482,7 +515,7 @@ private suspend fun analyzeBarcode(
 private suspend fun analyzeOcr(
     context: Context,
     bitmap: Bitmap,
-    onResult: (String) -> Unit
+    onResult: (String, Float?) -> Unit
 ) {
     val options = ChineseTextRecognizerOptions.Builder().build()
     val recognizer = TextRecognition.getClient(options)
@@ -493,9 +526,23 @@ private suspend fun analyzeOcr(
         val image = InputImage.fromBitmap(rotated, 0)
 
         try {
-            val text = recognizer.process(image).await()
-            if (text.text.isNotBlank()) {
-                onResult(text.text)
+            val result = recognizer.process(image).await()
+            if (result.text.isNotBlank()) {
+                // Calculate average confidence
+                val confidences = mutableListOf<Float>()
+                for (block in result.textBlocks) {
+                    block.lines.forEach { line ->
+                        line.elements.forEach { element ->
+                            element.confidence?.let { confidences.add(it) }
+                        }
+                    }
+                }
+                val avgConfidence = if (confidences.isNotEmpty()) {
+                    confidences.average().toFloat()
+                } else {
+                    null
+                }
+                onResult(result.text, avgConfidence)
                 return
             }
         } catch (_: Exception) {
@@ -503,7 +550,7 @@ private suspend fun analyzeOcr(
         }
     }
 
-    onResult("")
+    onResult("", null)
 }
 
 private fun rotateBitmap(bmp: Bitmap, degrees: Int): Bitmap {
