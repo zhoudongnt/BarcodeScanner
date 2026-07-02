@@ -10,13 +10,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -71,14 +69,6 @@ fun ImageScanScreen(
 
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var rotation by remember { mutableStateOf(0f) }
-
-    val transformableState = rememberTransformableState { zoomChange, panChange, rotationChange ->
-        scale *= zoomChange
-        scale = scale.coerceIn(1f, 5f)
-        offset += panChange
-        rotation += rotationChange
-    }
 
     val currentSelection by rememberUpdatedState(selection)
     val currentDragMode by rememberUpdatedState(dragMode)
@@ -94,7 +84,6 @@ fun ImageScanScreen(
             errorMessage = null
             scale = 1f
             offset = Offset.Zero
-            rotation = 0f
         }
     }
 
@@ -127,8 +116,44 @@ fun ImageScanScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            if (scale > 1f) {
+                                scale -= 0.5f
+                                scale = scale.coerceIn(1f, 5f)
+                            }
+                        },
+                        enabled = scale > 1f,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out")
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("${scale}x", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(modifier = Modifier.width(16.dp))
+                    IconButton(
+                        onClick = {
+                            if (scale < 5f) {
+                                scale += 0.5f
+                                scale = scale.coerceIn(1f, 5f)
+                            }
+                        },
+                        enabled = scale < 5f,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "Zoom In")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Text(
-                    text = "Pinch to zoom, drag on image to select area.",
+                    text = "Drag on image to select area.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
@@ -146,7 +171,7 @@ fun ImageScanScreen(
                             .fillMaxSize()
                             .onSizeChanged { imageBoxSize = it }
                     ) {
-                        // Layer 1: The actual image with zoom/pan (for visual)
+                        // Layer 1: The actual image with zoom (for visual)
                         Image(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = "Selected image",
@@ -156,20 +181,12 @@ fun ImageScanScreen(
                                     scaleX = scale,
                                     scaleY = scale,
                                     translationX = offset.x,
-                                    translationY = offset.y,
-                                    rotationZ = rotation
+                                    translationY = offset.y
                                 ),
                             contentScale = ContentScale.Fit,
                         )
 
-                        // Layer 2: Zoom/pan detector on top
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .transformable(state = transformableState)
-                        )
-
-                        // Layer 3: Selection box and drag handling (always in view coordinates)
+                        // Layer 2: Selection box and drag handling (always in view coordinates)
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
