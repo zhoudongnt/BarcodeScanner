@@ -6,8 +6,10 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -18,9 +20,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -36,6 +45,8 @@ fun ImageScanScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var selectedBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var selection by remember { mutableStateOf<CropSelection?>(null) }
+    var imageBoxSize by remember { mutableStateOf(IntSize.Zero) }
     var isAnalyzing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -45,6 +56,7 @@ fun ImageScanScreen(
         uri?.let {
             val bitmap = loadBitmapFromUri(context, it)
             selectedBitmap = bitmap
+            selection = null
             errorMessage = null
         }
     }
@@ -72,19 +84,64 @@ fun ImageScanScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            if (selectedBitmap != null) {
+            val bitmap = selectedBitmap
+            if (bitmap != null) {
+                Text(
+                    text = "Drag on the image to select the barcode area, then scan.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
                     shape = RoundedCornerShape(16.dp)
                 ) {
-                    Image(
-                        bitmap = selectedBitmap!!.asImageBitmap(),
-                        contentDescription = "Selected image",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onSizeChanged { imageBoxSize = it }
+                            .pointerInput(bitmap) {
+                                detectDragGestures(
+                                    onDragStart = { start ->
+                                        selection = CropSelection(start.x, start.y, start.x, start.y)
+                                        errorMessage = null
+                                    },
+                                    onDrag = { change, _ ->
+                                        selection = selection?.copy(
+                                            endX = change.position.x,
+                                            endY = change.position.y
+                                        )
+                                    }
+                                )
+                            }
+                    ) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "Selected image",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            selection?.normalized()?.let { rect ->
+                                drawRect(
+                                    color = Color.Yellow,
+                                    topLeft = Offset(rect.left, rect.top),
+                                    size = Size(rect.width, rect.height),
+                                    style = Stroke(width = 4.dp.toPx())
+                                )
+                                drawRect(
+                                    color = Color.Yellow.copy(alpha = 0.15f),
+                                    topLeft = Offset(rect.left, rect.top),
+                                    size = Size(rect.width, rect.height)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -99,27 +156,40 @@ fun ImageScanScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { selectedBitmap = null },
+                            onClick = {
+                                selectedBitmap = null
+                                selection = null
+                            },
                             modifier = Modifier.weight(1f)
                         ) {
                             Text("Clear")
                         }
+                        OutlinedButton(
+                            onClick = { selection = null },
+                            modifier = Modifier.weight(1f),
+                            enabled = selection != null
+                        ) {
+                            Text("Reset Box")
+                        }
                         Button(
                             onClick = {
-                                selectedBitmap?.let { bitmap ->
-                                    isAnalyzing = true
-                                    scope.launch {
-                                        analyzeImage(context, bitmap) { barcodes ->
-                                            isAnalyzing = false
-                                            if (barcodes.isNotEmpty()) {
-                                                val barcode = barcodes.first()
-                                                onResultFound(
-                                                    barcode.rawValue ?: "",
-                                                    getFormatName(barcode.format),
-                                                    getValueTypeName(barcode.valueType)
-                                                )
+                                isAnalyzing = true
+                                scope.launch {
+                                    val imageToScan = cropBitmap(bitmap, selection, imageBoxSize) ?: bitmap
+                                    analyzeImage(context, imageToScan) { barcodes ->
+                                        isAnalyzing = false
+                                        if (barcodes.isNotEmpty()) {
+                                            val barcode = barcodes.first()
+                                            onResultFound(
+                                                barcode.rawValue ?: "",
+                                                getFormatName(barcode.format),
+                                                getValueTypeName(barcode.valueType)
+                                            )
+                                        } else {
+                                            errorMessage = if (selection == null) {
+                                                "No barcode found. Try dragging a box around the barcode."
                                             } else {
-                                                errorMessage = "No barcode found in the image"
+                                                "No barcode found in the selected area. Try a larger box."
                                             }
                                         }
                                     }
@@ -175,6 +245,22 @@ fun ImageScanScreen(
     }
 }
 
+private data class CropSelection(
+    val startX: Float,
+    val startY: Float,
+    val endX: Float,
+    val endY: Float
+) {
+    val left: Float get() = minOf(startX, endX)
+    val top: Float get() = minOf(startY, endY)
+    val right: Float get() = maxOf(startX, endX)
+    val bottom: Float get() = maxOf(startY, endY)
+    val width: Float get() = right - left
+    val height: Float get() = bottom - top
+
+    fun normalized(): CropSelection = CropSelection(left, top, right, bottom)
+}
+
 private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
     return try {
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -183,6 +269,49 @@ private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
     } catch (e: Exception) {
         null
     }
+}
+
+private fun cropBitmap(
+    bitmap: Bitmap,
+    selection: CropSelection?,
+    boxSize: IntSize
+): Bitmap? {
+    val rect = selection?.normalized() ?: return null
+    if (rect.width < 20f || rect.height < 20f || boxSize.width <= 0 || boxSize.height <= 0) return null
+
+    val bitmapAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+    val boxAspect = boxSize.width.toFloat() / boxSize.height.toFloat()
+
+    val imageWidth: Float
+    val imageHeight: Float
+    val imageLeft: Float
+    val imageTop: Float
+
+    if (boxAspect > bitmapAspect) {
+        imageHeight = boxSize.height.toFloat()
+        imageWidth = imageHeight * bitmapAspect
+        imageLeft = (boxSize.width - imageWidth) / 2f
+        imageTop = 0f
+    } else {
+        imageWidth = boxSize.width.toFloat()
+        imageHeight = imageWidth / bitmapAspect
+        imageLeft = 0f
+        imageTop = (boxSize.height - imageHeight) / 2f
+    }
+
+    val cropLeftInView = rect.left.coerceIn(imageLeft, imageLeft + imageWidth)
+    val cropTopInView = rect.top.coerceIn(imageTop, imageTop + imageHeight)
+    val cropRightInView = rect.right.coerceIn(imageLeft, imageLeft + imageWidth)
+    val cropBottomInView = rect.bottom.coerceIn(imageTop, imageTop + imageHeight)
+
+    if (cropRightInView - cropLeftInView < 20f || cropBottomInView - cropTopInView < 20f) return null
+
+    val left = (((cropLeftInView - imageLeft) / imageWidth) * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
+    val top = (((cropTopInView - imageTop) / imageHeight) * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
+    val right = (((cropRightInView - imageLeft) / imageWidth) * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
+    val bottom = (((cropBottomInView - imageTop) / imageHeight) * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
+
+    return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
 }
 
 private suspend fun analyzeImage(
