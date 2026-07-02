@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -385,16 +386,56 @@ private suspend fun analyzeImage(
     bitmap: Bitmap,
     onResult: (List<Barcode>) -> Unit
 ) {
-    val image = InputImage.fromBitmap(bitmap, 0)
-    val scanner = BarcodeScanning.getClient()
+    val options = com.google.mlkit.vision.barcode.BarcodeScannerOptions.Builder()
+        .setBarcodeFormats(
+            Barcode.FORMAT_ALL_FORMATS,
+            Barcode.FORMAT_CODE_128,
+            Barcode.FORMAT_CODE_39,
+            Barcode.FORMAT_ITF,
+            Barcode.FORMAT_CODABAR
+        )
+        .build()
 
-    scanner.process(image)
-        .addOnSuccessListener { barcodes ->
-            onResult(barcodes)
+    val scanner = BarcodeScanning.getClient(options)
+
+    val rotations = listOf(0, 90, 180, 270)
+    for (rotation in rotations) {
+        val rotated = if (rotation == 0) {
+            bitmap
+        } else {
+            rotateBitmap(bitmap, rotation)
         }
-        .addOnFailureListener {
-            onResult(emptyList())
+
+        val image = InputImage.fromBitmap(rotated, 0)
+        var success = false
+        var barcodesResult: List<Barcode> = emptyList()
+
+        scanner.process(image)
+            .addOnSuccessListener { barcodes ->
+                success = true
+                barcodesResult = barcodes
+            }
+            .addOnFailureListener {
+                success = true
+            }
+
+        while (!success) {
+            delay(50)
         }
+
+        if (barcodesResult.isNotEmpty()) {
+            onResult(barcodesResult)
+            return
+        }
+    }
+
+    onResult(emptyList())
+}
+
+private fun rotateBitmap(bmp: Bitmap, degrees: Int): Bitmap {
+    val matrix = Matrix()
+    matrix.postRotate(degrees.toFloat())
+    return Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
 }
 
 private fun getFormatName(format: Int): String {
