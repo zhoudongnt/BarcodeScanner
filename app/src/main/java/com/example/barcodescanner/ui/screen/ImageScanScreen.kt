@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,7 +18,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -35,6 +33,9 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
+
+private enum class DragMode { NONE, CREATE, MOVE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +50,11 @@ fun ImageScanScreen(
     var imageBoxSize by remember { mutableStateOf(IntSize.Zero) }
     var isAnalyzing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var dragMode by remember { mutableStateOf(DragMode.NONE) }
+
+    val currentSelection by rememberUpdatedState(selection)
+    val currentDragMode by rememberUpdatedState(dragMode)
+    val currentBitmap by rememberUpdatedState(selectedBitmap)
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -87,7 +93,7 @@ fun ImageScanScreen(
             val bitmap = selectedBitmap
             if (bitmap != null) {
                 Text(
-                    text = "Drag on the image to select the barcode area, then scan.",
+                    text = "Drag inside the box to move it, or drag outside to draw a new box.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
@@ -104,17 +110,49 @@ fun ImageScanScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .onSizeChanged { imageBoxSize = it }
-                            .pointerInput(bitmap) {
+                            .pointerInput(currentBitmap) {
                                 detectDragGestures(
                                     onDragStart = { start ->
-                                        selection = CropSelection(start.x, start.y, start.x, start.y)
+                                        val sel = currentSelection?.normalized()
+                                        if (sel != null &&
+                                            start.x >= sel.left - 24f &&
+                                            start.x <= sel.right + 24f &&
+                                            start.y >= sel.top - 24f &&
+                                            start.y <= sel.bottom + 24f
+                                        ) {
+                                            dragMode = DragMode.MOVE
+                                        } else {
+                                            dragMode = DragMode.CREATE
+                                            selection = CropSelection(start.x, start.y, start.x, start.y)
+                                        }
                                         errorMessage = null
                                     },
-                                    onDrag = { change, _ ->
-                                        selection = selection?.copy(
-                                            endX = change.position.x,
-                                            endY = change.position.y
-                                        )
+                                    onDrag = { change, dragAmount ->
+                                        when (currentDragMode) {
+                                            DragMode.MOVE -> {
+                                                val sel = currentSelection ?: return@detectDragGestures
+                                                selection = CropSelection(
+                                                    startX = sel.startX + dragAmount.x,
+                                                    startY = sel.startY + dragAmount.y,
+                                                    endX = sel.endX + dragAmount.x,
+                                                    endY = sel.endY + dragAmount.y
+                                                )
+                                            }
+                                            DragMode.CREATE -> {
+                                                selection = selection?.copy(
+                                                    endX = change.position.x,
+                                                    endY = change.position.y
+                                                )
+                                            }
+                                            DragMode.NONE -> {}
+                                        }
+                                        change.consume()
+                                    },
+                                    onDragEnd = {
+                                        dragMode = DragMode.NONE
+                                    },
+                                    onDragCancel = {
+                                        dragMode = DragMode.NONE
                                     }
                                 )
                             }
@@ -128,17 +166,23 @@ fun ImageScanScreen(
 
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             selection?.normalized()?.let { rect ->
+                                val strokeW = 4.dp.toPx()
                                 drawRect(
-                                    color = Color.Yellow,
+                                    color = Color.Cyan,
                                     topLeft = Offset(rect.left, rect.top),
                                     size = Size(rect.width, rect.height),
-                                    style = Stroke(width = 4.dp.toPx())
+                                    style = Stroke(width = strokeW)
                                 )
                                 drawRect(
-                                    color = Color.Yellow.copy(alpha = 0.15f),
+                                    color = Color.Cyan.copy(alpha = 0.12f),
                                     topLeft = Offset(rect.left, rect.top),
                                     size = Size(rect.width, rect.height)
                                 )
+                                val corner = 12.dp.toPx()
+                                drawCircle(Color.Cyan, corner, Offset(rect.left, rect.top))
+                                drawCircle(Color.Cyan, corner, Offset(rect.right, rect.top))
+                                drawCircle(Color.Cyan, corner, Offset(rect.left, rect.bottom))
+                                drawCircle(Color.Cyan, corner, Offset(rect.right, rect.bottom))
                             }
                         }
                     }
@@ -271,47 +315,69 @@ private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
     }
 }
 
+private fun computeImageBounds(
+    bitmap: Bitmap,
+    boxSize: IntSize
+): ImageBounds {
+    val bitmapAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+    val boxAspect = boxSize.width.toFloat() / boxSize.height.toFloat()
+
+    return if (boxAspect > bitmapAspect) {
+        val h = boxSize.height.toFloat()
+        val w = h * bitmapAspect
+        ImageBounds(
+            left = (boxSize.width - w) / 2f,
+            top = 0f,
+            right = (boxSize.width + w) / 2f,
+            bottom = h
+        )
+    } else {
+        val w = boxSize.width.toFloat()
+        val h = w / bitmapAspect
+        ImageBounds(
+            left = 0f,
+            top = (boxSize.height - h) / 2f,
+            right = w,
+            bottom = (boxSize.height + h) / 2f
+        )
+    }
+}
+
+private data class ImageBounds(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float
+)
+
 private fun cropBitmap(
     bitmap: Bitmap,
     selection: CropSelection?,
     boxSize: IntSize
 ): Bitmap? {
     val rect = selection?.normalized() ?: return null
-    if (rect.width < 20f || rect.height < 20f || boxSize.width <= 0 || boxSize.height <= 0) return null
+    val bmp = computeImageBounds(bitmap, boxSize)
+    if (rect.width < 20f || rect.height < 20f) return null
 
-    val bitmapAspect = bitmap.width.toFloat() / bitmap.height.toFloat()
-    val boxAspect = boxSize.width.toFloat() / boxSize.height.toFloat()
+    val cropLeft = rect.left.coerceIn(bmp.left, bmp.right)
+    val cropTop = rect.top.coerceIn(bmp.top, bmp.bottom)
+    val cropRight = rect.right.coerceIn(bmp.left, bmp.right)
+    val cropBottom = rect.bottom.coerceIn(bmp.top, bmp.bottom)
 
-    val imageWidth: Float
-    val imageHeight: Float
-    val imageLeft: Float
-    val imageTop: Float
+    if (cropRight - cropLeft < 20f || cropBottom - cropTop < 20f) return null
 
-    if (boxAspect > bitmapAspect) {
-        imageHeight = boxSize.height.toFloat()
-        imageWidth = imageHeight * bitmapAspect
-        imageLeft = (boxSize.width - imageWidth) / 2f
-        imageTop = 0f
-    } else {
-        imageWidth = boxSize.width.toFloat()
-        imageHeight = imageWidth / bitmapAspect
-        imageLeft = 0f
-        imageTop = (boxSize.height - imageHeight) / 2f
-    }
+    val iw = bmp.right - bmp.left
+    val ih = bmp.bottom - bmp.top
+    if (iw <= 0f || ih <= 0f) return null
 
-    val cropLeftInView = rect.left.coerceIn(imageLeft, imageLeft + imageWidth)
-    val cropTopInView = rect.top.coerceIn(imageTop, imageTop + imageHeight)
-    val cropRightInView = rect.right.coerceIn(imageLeft, imageLeft + imageWidth)
-    val cropBottomInView = rect.bottom.coerceIn(imageTop, imageTop + imageHeight)
+    val px = (((cropLeft - bmp.left) / iw) * bitmap.width).roundToInt().coerceIn(0, bitmap.width)
+    val py = (((cropTop - bmp.top) / ih) * bitmap.height).roundToInt().coerceIn(0, bitmap.height)
+    val pw = (((cropRight - bmp.left) / iw) * bitmap.width).roundToInt().coerceIn(0, bitmap.width - px)
+    val ph = (((cropBottom - bmp.top) / ih) * bitmap.height).roundToInt().coerceIn(0, bitmap.height - py)
 
-    if (cropRightInView - cropLeftInView < 20f || cropBottomInView - cropTopInView < 20f) return null
+    if (pw < 4 || ph < 4) return null
 
-    val left = (((cropLeftInView - imageLeft) / imageWidth) * bitmap.width).toInt().coerceIn(0, bitmap.width - 1)
-    val top = (((cropTopInView - imageTop) / imageHeight) * bitmap.height).toInt().coerceIn(0, bitmap.height - 1)
-    val right = (((cropRightInView - imageLeft) / imageWidth) * bitmap.width).toInt().coerceIn(left + 1, bitmap.width)
-    val bottom = (((cropBottomInView - imageTop) / imageHeight) * bitmap.height).toInt().coerceIn(top + 1, bitmap.height)
-
-    return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+    return Bitmap.createBitmap(bitmap, px, py, pw, ph)
 }
 
 private suspend fun analyzeImage(
