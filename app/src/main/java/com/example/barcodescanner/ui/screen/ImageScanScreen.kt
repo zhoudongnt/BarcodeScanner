@@ -11,10 +11,12 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,25 +33,14 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.mlkit.vision.text.TextRecognition
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlin.math.roundToInt
 
 private enum class DragMode { NONE, CREATE, MOVE }
-private enum class ScanMode { BARCODE, OCR }
-
-data class ScanResult(
-    val rawValue: String,
-    val format: String,
-    val valueType: String,
-    val confidence: Float? = null
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,7 +56,6 @@ fun ImageScanScreen(
     var isAnalyzing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var dragMode by remember { mutableStateOf(DragMode.NONE) }
-    var scanMode by remember { mutableStateOf(ScanMode.BARCODE) }
 
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -112,10 +102,6 @@ fun ImageScanScreen(
         ) {
             val bitmap = selectedBitmap
             if (bitmap != null) {
-                SegmentedButtons(scanMode) { mode -> scanMode = mode }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
@@ -153,7 +139,7 @@ fun ImageScanScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Drag on image to select area.",
+                    text = "Drag on image to select area, then tap Scan.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
                 )
@@ -171,7 +157,6 @@ fun ImageScanScreen(
                             .fillMaxSize()
                             .onSizeChanged { imageBoxSize = it }
                     ) {
-                        // Layer 1: The actual image with zoom (for visual)
                         Image(
                             bitmap = bitmap.asImageBitmap(),
                             contentDescription = "Selected image",
@@ -186,14 +171,12 @@ fun ImageScanScreen(
                             contentScale = ContentScale.Fit,
                         )
 
-                        // Layer 2: Selection box and drag handling (always in view coordinates)
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .pointerInput(currentBitmap) {
                                     detectDragGestures(
                                         onDragStart = { start ->
-                                            // Transform selection coordinates back to current view (without scale)
                                             val sel = currentSelection?.normalized()
                                             if (sel != null &&
                                                 start.x >= sel.left - 24f &&
@@ -295,42 +278,19 @@ fun ImageScanScreen(
                                 isAnalyzing = true
                                 scope.launch {
                                     val imageToScan = cropBitmap(bitmap, selection, imageBoxSize, scale, offset) ?: bitmap
-                                    when (scanMode) {
-                                        ScanMode.BARCODE -> {
-                                            analyzeBarcode(context, imageToScan) { barcodes ->
-                                                isAnalyzing = false
-                                                if (barcodes.isNotEmpty()) {
-                                                    val barcode = barcodes.first()
-                                                    onResultFound(
-                                                        barcode.rawValue ?: "",
-                                                        getFormatName(barcode.format),
-                                                        getValueTypeName(barcode.valueType)
-                                                    )
-                                                } else {
-                                                    errorMessage = if (selection == null) {
-                                                        "No barcode found. Try dragging a box around the barcode."
-                                                    } else {
-                                                        "No barcode found in the selected area. Try a larger box."
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        ScanMode.OCR -> {
-                                            analyzeOcr(context, imageToScan) { text, confidence ->
-                                                isAnalyzing = false
-                                                if (text.isNotBlank()) {
-                                                    val confidenceStr = confidence?.let {
-                                                        " (${(it * 100).toInt()}% confidence)"
-                                                    } ?: ""
-                                                    onResultFound(
-                                                        "$text$confidenceStr",
-                                                        "OCR",
-                                                        "Text"
-                                                    )
-                                                } else {
-                                                    errorMessage = "No text found in the selected area."
-                                                }
-                                            }
+                                    analyzeOcr(context, imageToScan) { text, confidence ->
+                                        isAnalyzing = false
+                                        if (text.isNotBlank()) {
+                                            val confidenceStr = confidence?.let {
+                                                " (${(it * 100).toInt()}% confidence)"
+                                            } ?: ""
+                                            onResultFound(
+                                                "$text$confidenceStr",
+                                                "OCR",
+                                                "Text"
+                                            )
+                                        } else {
+                                            errorMessage = "No text found in the selected area."
                                         }
                                     }
                                 }
@@ -380,44 +340,6 @@ fun ImageScanScreen(
                         )
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SegmentedButtons(
-    selectedMode: ScanMode,
-    onModeSelected: (ScanMode) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        ScanMode.values().forEach { mode ->
-            val isSelected = selectedMode == mode
-            Button(
-                onClick = { onModeSelected(mode) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isSelected) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                    contentColor = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                ),
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = when (mode) {
-                        ScanMode.BARCODE -> "Barcode"
-                        ScanMode.OCR -> "OCR (Text)"
-                    }
-                )
             }
         }
     }
@@ -494,19 +416,12 @@ private fun cropBitmap(
     val rect = selection?.normalized() ?: return null
     val bmp = computeImageBounds(bitmap, boxSize)
 
-    // First, reverse the graphicsLayer transform on selection coordinates
-    // Reverse order: translate then scale
     val center = Offset(boxSize.width.toFloat()/2, boxSize.height.toFloat()/2)
-
-    // Because graphicsLayer scales from center, we need to reverse that transform properly
     val invScale = 1/scale
     val invOffset = Offset(-offset.x, -offset.y)
 
-    // Transform selection points back to pre-scaled view
     fun transformPoint(p: Offset): Offset {
-        // 1. Subtract offset
         val t1 = p + invOffset
-        // 2. Unscale around center
         val fromCenter = t1 - center
         val unscaled = fromCenter * invScale
         return unscaled + center
@@ -517,7 +432,6 @@ private fun cropBitmap(
     val topTrans = transformPoint(Offset(0f, rect.top)).y
     val bottomTrans = transformPoint(Offset(0f, rect.bottom)).y
 
-    // Now clamp to image bounds
     val cropLeft = minOf(leftTrans, rightTrans).coerceIn(bmp.left, bmp.right)
     val cropTop = minOf(topTrans, bottomTrans).coerceIn(bmp.top, bmp.bottom)
     val cropRight = maxOf(leftTrans, rightTrans).coerceIn(bmp.left, bmp.right)
@@ -539,48 +453,11 @@ private fun cropBitmap(
     return Bitmap.createBitmap(bitmap, px, py, pw, ph)
 }
 
-private suspend fun analyzeBarcode(
-    context: Context,
-    bitmap: Bitmap,
-    onResult: (List<Barcode>) -> Unit
-) {
-    val options = com.google.mlkit.vision.barcode.BarcodeScannerOptions.Builder()
-        .setBarcodeFormats(
-            Barcode.FORMAT_ALL_FORMATS,
-            Barcode.FORMAT_CODE_128,
-            Barcode.FORMAT_CODE_39,
-            Barcode.FORMAT_ITF,
-            Barcode.FORMAT_CODABAR
-        )
-        .build()
-
-    val scanner = BarcodeScanning.getClient(options)
-
-    val rotations = listOf(0, 90, 180, 270)
-    for (rotation in rotations) {
-        val rotated = if (rotation == 0) bitmap else rotateBitmap(bitmap, rotation)
-        val image = InputImage.fromBitmap(rotated, 0)
-
-        try {
-            val barcodes = scanner.process(image).await()
-            if (barcodes.isNotEmpty()) {
-                onResult(barcodes)
-                return
-            }
-        } catch (_: Exception) {
-            // Ignore errors
-        }
-    }
-
-    onResult(emptyList())
-}
-
 private suspend fun analyzeOcr(
     context: Context,
     bitmap: Bitmap,
     onResult: (String, Float?) -> Unit
 ) {
-    // Use LATIN OCR for better accuracy on English letters/digits
     val options = TextRecognizerOptions.Builder().build()
     val recognizer = TextRecognition.getClient(options)
 
@@ -592,7 +469,6 @@ private suspend fun analyzeOcr(
         try {
             val result = recognizer.process(image).await()
             if (result.text.isNotBlank()) {
-                // Calculate average confidence
                 val confidences = mutableListOf<Float>()
                 for (block in result.textBlocks) {
                     block.lines.forEach { line ->
@@ -621,39 +497,4 @@ private fun rotateBitmap(bmp: Bitmap, degrees: Int): Bitmap {
     val matrix = Matrix()
     matrix.postRotate(degrees.toFloat())
     return Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
-}
-
-private fun getFormatName(format: Int): String {
-    return when (format) {
-        Barcode.FORMAT_QR_CODE -> "QR Code"
-        Barcode.FORMAT_EAN_13 -> "EAN-13"
-        Barcode.FORMAT_EAN_8 -> "EAN-8"
-        Barcode.FORMAT_UPC_A -> "UPC-A"
-        Barcode.FORMAT_UPC_E -> "UPC-E"
-        Barcode.FORMAT_CODE_128 -> "Code 128"
-        Barcode.FORMAT_CODE_39 -> "Code 39"
-        Barcode.FORMAT_CODE_93 -> "Code 93"
-        Barcode.FORMAT_CODABAR -> "Codabar"
-        Barcode.FORMAT_ITF -> "ITF"
-        Barcode.FORMAT_DATA_MATRIX -> "Data Matrix"
-        Barcode.FORMAT_PDF417 -> "PDF417"
-        Barcode.FORMAT_AZTEC -> "Aztec"
-        else -> "Unknown"
-    }
-}
-
-private fun getValueTypeName(valueType: Int): String {
-    return when (valueType) {
-        Barcode.TYPE_TEXT -> "Text"
-        Barcode.TYPE_URL -> "URL"
-        Barcode.TYPE_EMAIL -> "Email"
-        Barcode.TYPE_PHONE -> "Phone"
-        Barcode.TYPE_SMS -> "SMS"
-        Barcode.TYPE_WIFI -> "WiFi"
-        Barcode.TYPE_GEO -> "Location"
-        Barcode.TYPE_CONTACT_INFO -> "Contact"
-        Barcode.TYPE_CALENDAR_EVENT -> "Calendar Event"
-        Barcode.TYPE_DRIVER_LICENSE -> "Driver License"
-        else -> "Unknown"
-    }
 }

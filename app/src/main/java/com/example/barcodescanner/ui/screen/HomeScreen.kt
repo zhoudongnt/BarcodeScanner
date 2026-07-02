@@ -4,7 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -26,7 +26,7 @@ fun HomeScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Barcode Scanner",
+            text = "OCR Text Scanner",
             style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.primary
         )
@@ -34,7 +34,7 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Scan barcodes or select images",
+            text = "Scan text from camera or images",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f)
         )
@@ -46,9 +46,9 @@ fun HomeScreen(
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             HomeOptionCard(
-                icon = Icons.Default.CameraAlt,
+                icon = Icons.Default.PhotoCamera,
                 title = "Camera",
-                subtitle = "Real-time scan",
+                subtitle = "Real-time OCR",
                 onClick = onCameraClick,
                 modifier = Modifier.weight(1f)
             )
